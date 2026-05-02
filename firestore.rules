@@ -1,0 +1,172 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Global Defense
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Primitives
+    function incoming() { return request.resource.data; }
+    function existing() { return resource.data; }
+    function isSignedIn() { return request.auth != null; }
+    function isValidId(id) { 
+      return id is string && id.size() > 0 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    //
+    // USERS
+    //
+    function isValidUser(data) {
+      return data.keys().hasAll(['email', 'createdAt']) && 
+             data.keys().size() <= 6 &&
+             data.email is string && data.email.size() <= 250 &&
+             data.createdAt is timestamp &&
+             (data.keys().hasAny(['displayName']) == false || (data.displayName is string && data.displayName.size() <= 100)) &&
+             (data.keys().hasAny(['photoURL']) == false || (data.photoURL is string && data.photoURL.size() <= 500)) &&
+             (data.keys().hasAny(['totalGenerations']) == false || (data.totalGenerations is number && data.totalGenerations >= 0));
+    }
+    
+    match /users/{userId} {
+      allow get: if isValidId(userId);
+      allow list: if false;
+      allow create: if isSignedIn() &&
+                    isValidId(userId) &&
+                    request.auth.uid == userId &&
+                    isValidUser(incoming()) &&
+                    incoming().createdAt == request.time;
+      allow update: if isSignedIn() &&
+                    isValidId(userId) &&
+                    request.auth.uid == userId &&
+                    isValidUser(incoming()) &&
+                    incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'photoURL', 'totalGenerations']) &&
+                    incoming().createdAt == existing().createdAt;
+    }
+
+    //
+    // PROMPTS
+    //
+    function isValidPrompt(data) {
+      return data.keys().hasAll(['authorId', 'imageUrl', 'promptText', 'status', 'createdAt', 'upvotes']) &&
+             data.keys().size() <= 15 &&
+             data.authorId is string && data.authorId.size() <= 128 &&
+             data.imageUrl is string && data.imageUrl.size() <= 6000000 &&
+             data.promptText is string && data.promptText.size() <= 50000 &&
+             data.status in ['draft', 'published'] &&
+             data.createdAt is timestamp &&
+             data.upvotes is number &&
+             (data.keys().hasAny(['category']) == false || (data.category is string && data.category.size() <= 20)) &&
+             (data.keys().hasAny(['summary']) == false || (data.summary is string && data.summary.size() <= 5000)) &&
+             (data.keys().hasAny(['tags']) == false || (data.tags is list && data.tags.size() <= 10)) &&
+             (data.keys().hasAny(['model']) == false || (data.model is string && data.model.size() <= 100)) &&
+             (data.keys().hasAny(['aspectRatio']) == false || (data.aspectRatio is string && data.aspectRatio.size() <= 20)) &&
+             (data.keys().hasAny(['stylize']) == false || data.stylize is number) &&
+             (data.keys().hasAny(['seed']) == false || (data.seed is string && data.seed.size() <= 50)) &&
+             (data.keys().hasAny(['cfgScale']) == false || data.cfgScale is number) &&
+             (data.keys().hasAny(['steps']) == false || data.steps is number);
+    }
+
+    match /prompts/{promptId} {
+      allow get: if isValidId(promptId) && (existing().status == 'published' || (isSignedIn() && existing().authorId == request.auth.uid));
+      allow list: if existing().status == 'published' || (isSignedIn() && existing().authorId == request.auth.uid);
+      allow create: if isSignedIn() &&
+                    isValidId(promptId) &&
+                    isValidPrompt(incoming()) &&
+                    incoming().authorId == request.auth.uid &&
+                    incoming().createdAt == request.time &&
+                    incoming().upvotes == 0 &&
+                    exists(/databases/$(database)/documents/users/$(request.auth.uid));
+      allow update: if isSignedIn() &&
+                    isValidId(promptId) &&
+                    (
+                      // Owner update
+                      (existing().get('authorId', request.auth.uid) == request.auth.uid && 
+                       isValidPrompt(incoming()) &&
+                       incoming().diff(existing()).affectedKeys().hasOnly(['status', 'imageUrl', 'promptText', 'category', 'summary', 'tags', 'model', 'aspectRatio', 'stylize', 'seed', 'cfgScale', 'steps', 'upvotes', 'authorId', 'createdAt']) &&
+                       incoming().authorId == existing().get('authorId', incoming().authorId) &&
+                       incoming().createdAt == existing().get('createdAt', incoming().createdAt) &&
+                       incoming().upvotes == existing().get('upvotes', 0))
+                      ||
+                      // Upvote logic (anyone signed in can upvote)
+                      (incoming().diff(existing()).affectedKeys().hasOnly(['upvotes']) &&
+                       incoming().upvotes is number &&
+                       (incoming().upvotes == existing().get('upvotes', 0) + 1 || 
+                        incoming().upvotes == existing().get('upvotes', 0) - 1 || 
+                        incoming().upvotes == existing().get('upvotes', 0) + 2 || 
+                        incoming().upvotes == existing().get('upvotes', 0) - 2 ||
+                        incoming().upvotes == existing().get('upvotes', 0)))
+                    );
+      allow delete: if isSignedIn() && isValidId(promptId) && existing().authorId == request.auth.uid;
+      
+      match /votes/{voteId} {
+         function isValidVote(data) {
+           return data.keys().hasAll(['value', 'createdAt']) &&
+                  data.keys().size() <= 2 &&
+                  (data.value == 1 || data.value == -1) &&
+                  data.createdAt is timestamp;
+         }
+         allow get: if true;
+         allow list: if true;
+         allow create: if isSignedIn() && isValidId(voteId) && request.auth.uid == voteId && isValidVote(incoming()) && incoming().createdAt == request.time;
+         allow update: if isSignedIn() && isValidId(voteId) && request.auth.uid == voteId && isValidVote(incoming()) && incoming().createdAt == existing().createdAt;
+         allow delete: if isSignedIn() && isValidId(voteId) && request.auth.uid == voteId;
+      }
+    }
+
+    //
+    // SAVES
+    //
+    function isValidSave(data) {
+      return data.keys().hasAll(['userId', 'promptId', 'createdAt']) &&
+             data.keys().size() == 3 &&
+             data.userId is string && data.userId.size() <= 128 &&
+             data.promptId is string && data.promptId.size() <= 128 &&
+             data.createdAt is timestamp;
+    }
+
+    match /saves/{saveId} {
+      allow get: if isValidId(saveId) && isSignedIn() && (resource == null || existing().userId == request.auth.uid);
+      allow list: if isSignedIn() && existing().userId == request.auth.uid;
+      allow create: if isSignedIn() &&
+                    isValidId(saveId) &&
+                    isValidSave(incoming()) &&
+                    incoming().userId == request.auth.uid &&
+                    incoming().createdAt == request.time &&
+                    exists(/databases/$(database)/documents/prompts/$(incoming().promptId));
+      allow delete: if isSignedIn() && isValidId(saveId) && existing().userId == request.auth.uid;
+    }
+
+    //
+    // COMMENTS
+    //
+    function isValidComment(data) {
+      return data.keys().hasAll(['promptId', 'authorId', 'text', 'createdAt']) &&
+             data.keys().size() == 4 &&
+             data.promptId is string && data.promptId.size() <= 128 &&
+             data.authorId is string && data.authorId.size() <= 128 &&
+             data.text is string && data.text.size() > 0 && data.text.size() <= 5000 &&
+             data.createdAt is timestamp;
+    }
+
+    match /comments/{commentId} {
+      allow get: if isValidId(commentId);
+      allow list: if true;
+      allow create: if isSignedIn() &&
+                    isValidId(commentId) &&
+                    isValidComment(incoming()) &&
+                    incoming().authorId == request.auth.uid &&
+                    incoming().createdAt == request.time &&
+                    exists(/databases/$(database)/documents/prompts/$(incoming().promptId));
+      allow update: if isSignedIn() &&
+                    isValidId(commentId) &&
+                    isValidComment(incoming()) &&
+                    existing().authorId == request.auth.uid &&
+                    incoming().authorId == existing().authorId &&
+                    incoming().createdAt == existing().createdAt &&
+                    incoming().promptId == existing().promptId &&
+                    incoming().diff(existing()).affectedKeys().hasOnly(['text']);
+      allow delete: if isSignedIn() && isValidId(commentId) && existing().authorId == request.auth.uid;
+    }
+  }
+}

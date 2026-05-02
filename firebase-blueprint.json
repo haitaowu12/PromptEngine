@@ -1,0 +1,80 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "User profile data",
+      "type": "object",
+      "properties": {
+        "displayName": { "type": "string" },
+        "email": { "type": "string" },
+        "photoURL": { "type": "string" },
+        "totalGenerations": { "type": "number" },
+        "createdAt": { "type": "number" }
+      },
+      "required": ["email", "createdAt"]
+    },
+    "Prompt": {
+      "title": "Prompt",
+      "description": "Generative AI prompt with media",
+      "type": "object",
+      "properties": {
+        "authorId": { "type": "string" },
+        "imageUrl": { "type": "string" },
+        "promptText": { "type": "string" },
+        "category": { "type": "string" },
+        "tags": { "type": "array", "items": { "type": "string" } },
+        "model": { "type": "string" },
+        "aspectRatio": { "type": "string" },
+        "stylize": { "type": "number" },
+        "seed": { "type": "string" },
+        "cfgScale": { "type": "number" },
+        "steps": { "type": "number" },
+        "upvotes": { "type": "number" },
+        "status": { "type": "string", "enum": ["draft", "published"] },
+        "createdAt": { "type": "number" }
+      },
+      "required": ["authorId", "imageUrl", "promptText", "status", "createdAt", "upvotes"]
+    },
+    "Save": {
+      "title": "Save",
+      "description": "A record of a saved prompt",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "promptId": { "type": "string" },
+        "createdAt": { "type": "number" }
+      },
+      "required": ["userId", "promptId", "createdAt"]
+    },
+    "Comment": {
+      "title": "Comment",
+      "description": "A comment on a prompt",
+      "type": "object",
+      "properties": {
+        "promptId": { "type": "string" },
+        "authorId": { "type": "string" },
+        "text": { "type": "string" },
+        "createdAt": { "type": "number" }
+      },
+      "required": ["promptId", "authorId", "text", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/User" },
+      "description": "User profile documents"
+    },
+    "/prompts/{promptId}": {
+      "schema": { "$ref": "#/entities/Prompt" },
+      "description": "Prompts created by users"
+    },
+    "/saves/{saveId}": {
+      "schema": { "$ref": "#/entities/Save" },
+      "description": "Prompts saved by users"
+    },
+    "/comments/{commentId}": {
+      "schema": { "$ref": "#/entities/Comment" },
+      "description": "Comments left on prompts"
+    }
+  }
+}
